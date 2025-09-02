@@ -49,6 +49,24 @@ export async function POST(request: NextRequest) {
     // Handle image upload to Cloudinary
     if (image && image.size > 0) {
       try {
+        // Check file size (Vercel has limits)
+        const maxSize = 10 * 1024 * 1024 // 10MB
+        if (image.size > maxSize) {
+          return NextResponse.json(
+            { error: 'Image too large. Maximum size is 10MB.' },
+            { status: 400 }
+          )
+        }
+        
+        // Verify Cloudinary config
+        if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+          console.error('Missing Cloudinary environment variables')
+          return NextResponse.json(
+            { error: 'Image upload service not configured' },
+            { status: 500 }
+          )
+        }
+        
         const bytes = await image.arrayBuffer()
         const buffer = Buffer.from(bytes)
         
@@ -56,19 +74,36 @@ export async function POST(request: NextRequest) {
         const base64 = buffer.toString('base64')
         const dataURI = `data:${image.type};base64,${base64}`
         
-        // Upload to Cloudinary
+        // Upload to Cloudinary with timeout
         const uploadResponse = await cloudinary.uploader.upload(dataURI, {
           folder: 'school_images',
           public_id: `school_${Date.now()}`,
           overwrite: true,
-          resource_type: 'image'
+          resource_type: 'image',
+          timeout: 30000 // 30 second timeout
         })
         
         imageUrl = uploadResponse.secure_url
-      } catch (uploadError) {
+      } catch (uploadError: any) {
         console.error('Cloudinary upload error:', uploadError)
+        
+        // More detailed error logging for debugging
+        console.error('Error details:', {
+          message: uploadError?.message || 'Unknown error',
+          name: uploadError?.name || 'Unknown',
+          http_code: uploadError?.http_code || 'No code',
+          cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+          hasApiKey: !!process.env.CLOUDINARY_API_KEY,
+          hasApiSecret: !!process.env.CLOUDINARY_API_SECRET,
+          imageSize: image.size,
+          imageType: image.type
+        })
+        
         return NextResponse.json(
-          { error: 'Failed to upload image' },
+          { 
+            error: 'Failed to upload image',
+            details: uploadError?.message || 'Unknown upload error'
+          },
           { status: 500 }
         )
       }
