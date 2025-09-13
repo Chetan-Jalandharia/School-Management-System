@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createConnection } from '@/lib/database'
 import cloudinary from '@/lib/cloudinary'
+import { getAuthTokenFromRequest, verifyAuthToken, checkAdminPermission } from '@/lib/auth'
 
-// GET - Fetch all schools
+// GET - Fetch all schools (public - no auth required)
 export async function GET() {
   try {
     const connection = await createConnection()
@@ -23,9 +24,26 @@ export async function GET() {
   }
 }
 
-// POST - Add new school
+// POST - Add new school (requires authentication)
 export async function POST(request: NextRequest) {
   try {
+    // Check authentication
+    const token = getAuthTokenFromRequest(request)
+    if (!token) {
+      return NextResponse.json(
+        { error: 'Authentication required. Please log in to add schools.' },
+        { status: 401 }
+      )
+    }
+
+    const payload = verifyAuthToken(token)
+    if (!payload) {
+      return NextResponse.json(
+        { error: 'Invalid authentication. Please log in again.' },
+        { status: 401 }
+      )
+    }
+
     const formData = await request.formData()
     
     const name = formData.get('name') as string
@@ -127,6 +145,106 @@ export async function POST(request: NextRequest) {
     console.error('Database error:', error)
     return NextResponse.json(
       { error: 'Failed to add school' },
+      { status: 500 }
+    )
+  }
+}
+
+// DELETE - Delete school (requires admin permission)
+export async function DELETE(request: NextRequest) {
+  try {
+    // Check authentication
+    const token = getAuthTokenFromRequest(request)
+    if (!token) {
+      return NextResponse.json(
+        { error: 'Authentication required. Please log in.' },
+        { status: 401 }
+      )
+    }
+
+    const payload = verifyAuthToken(token)
+    if (!payload) {
+      return NextResponse.json(
+        { error: 'Invalid authentication. Please log in again.' },
+        { status: 401 }
+      )
+    }
+
+    // Check admin permission
+    if (!checkAdminPermission(payload.email)) {
+      return NextResponse.json(
+        { error: 'Admin access required. Only administrators can delete schools.' },
+        { status: 403 }
+      )
+    }
+
+    // Get school ID from request
+    const { searchParams } = new URL(request.url)
+    const schoolId = searchParams.get('id')
+
+    if (!schoolId) {
+      return NextResponse.json(
+        { error: 'School ID is required' },
+        { status: 400 }
+      )
+    }
+
+    const connection = await createConnection()
+
+    // Check if school exists and get image URL for cleanup
+    const [existingSchool] = await connection.execute(
+      'SELECT id, image FROM schools WHERE id = ?',
+      [schoolId]
+    ) as any
+
+    if (existingSchool.length === 0) {
+      await connection.end()
+      return NextResponse.json(
+        { error: 'School not found' },
+        { status: 404 }
+      )
+    }
+
+    // Delete from database
+    const [deleteResult] = await connection.execute(
+      'DELETE FROM schools WHERE id = ?',
+      [schoolId]
+    ) as any
+
+    await connection.end()
+
+    if (deleteResult.affectedRows === 0) {
+      return NextResponse.json(
+        { error: 'Failed to delete school' },
+        { status: 500 }
+      )
+    }
+
+    // Optional: Delete image from Cloudinary if exists
+    if (existingSchool[0].image) {
+      try {
+        // Extract public_id from Cloudinary URL
+        const imageUrl = existingSchool[0].image
+        const publicIdMatch = imageUrl.match(/\/school_(\d+)\.[^/]+$/)
+        if (publicIdMatch) {
+          const publicId = `school_images/school_${publicIdMatch[1]}`
+          await cloudinary.uploader.destroy(publicId)
+        }
+      } catch (cloudinaryError) {
+        console.error('Cloudinary deletion error:', cloudinaryError)
+        // Don't fail the whole operation if image deletion fails
+      }
+    }
+
+    return NextResponse.json(
+      { message: 'School deleted successfully', id: schoolId },
+      { status: 200 }
+    )
+
+  } catch (error) {
+    console.error('Delete school error:', error)
+    return NextResponse.json(
+      { error: 'Failed to delete school' },
       { status: 500 }
     )
   }

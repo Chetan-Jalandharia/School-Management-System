@@ -1,5 +1,6 @@
 import './globals.css'
 import React from 'react'
+import { AuthProvider } from '@/lib/AuthContext'
 
 export const metadata = {
   title: 'School Management System',
@@ -13,7 +14,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="font-sans">{children}</body>
+      <body className="font-sans">
+        <AuthProvider>
+          {children}
+        </AuthProvider>
+      </body>
     </html>
   )
 }
